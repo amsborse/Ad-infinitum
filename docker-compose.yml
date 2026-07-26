@@ -1,0 +1,35 @@
+# Ad-infinitum local development & verification
+#
+# Quick start (Windows / macOS / Linux):
+#   docker compose up docs          → landing page at http://localhost:8080
+#   docker compose --profile lab run --rm lab   → F2FS smoke test (Linux kernel w/ F2FS)
+
+services:
+  docs:
+    build:
+      context: .
+      dockerfile: docker/docs/Dockerfile
+    ports:
+      - "8080:80"
+    restart: unless-stopped
+
+  lab:
+    profiles: ["lab"]
+    build:
+      context: .
+      dockerfile: docker/lab/Dockerfile
+    privileged: true
+    volumes:
+      - .:/workspace:ro
+    environment:
+      - MOUNT=/mnt/f2fs-test
+
+  live:
+    profiles: ["live"]
+    build:
+      context: .
+      dockerfile: docker/live/Dockerfile
+    ports:
+      - "8765:8765"
+    volumes:
+      - .:/workspace:ro

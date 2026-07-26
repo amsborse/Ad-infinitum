@@ -1,0 +1,30 @@
+# Fio job: compile-like sequential write + read (Compilebench analogue)
+#
+# Usage:
+#   fio benchmarks/fio/compile-workload.fio --directory=/mnt/f2fs
+
+[global]
+ioengine=sync
+direct=0
+size=512m
+group_reporting=1
+
+[compile-write]
+rw=write
+bs=128k
+numjobs=1
+filename=compile-tree.dat
+
+[compile-read]
+stonewall
+rw=read
+bs=128k
+numjobs=1
+filename=compile-tree.dat
+
+[compile-randread]
+stonewall
+rw=randread
+bs=4k
+numjobs=4
+filename=compile-tree.dat

@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ad-infinitum 2026 — F2FS GC Research</title>
+  <meta name="description" content="2026 edition: latency-aware F2FS garbage collection research — Greedy, Cost-Benefit, ATGC policies, fio benchmarks, ftrace tooling." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg:#050810; --bg2:#0c1220; --bg3:#121c30; --border:rgba(120,180,255,.12);
+      --text:#e8eef8; --muted:#8ba3c7; --accent:#3b9eff; --accent2:#00d4aa;
+      --warn:#ffb020; --danger:#ff6b6b; --greedy:#00d4aa; --cb:#a78bfa; --atgc:#ff8c42;
+      --nilfs:#ff8c42; --f2fs:#3b9eff; --radius:14px;
+    }
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    html{scroll-behavior:smooth}
+    body{font-family:'Outfit',system-ui,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;overflow-x:hidden}
+    .mesh{position:fixed;inset:0;z-index:-2;background:var(--bg)}
+    .grid-overlay{position:fixed;inset:0;z-index:-1;opacity:.25;pointer-events:none;
+      background-image:linear-gradient(rgba(255,255,255,.03) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.03) 1px,transparent 1px);
+      background-size:48px 48px}
+
+    nav{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;align-items:center;justify-content:space-between;
+      padding:1rem 2rem;background:rgba(5,8,16,.82);backdrop-filter:blur(16px);border-bottom:1px solid var(--border)}
+    .logo{font-weight:700;font-size:1.1rem;background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+    .nav-links{display:flex;gap:1.25rem;list-style:none;flex-wrap:wrap}
+    .nav-links a{color:var(--muted);text-decoration:none;font-size:.85rem;font-weight:500}
+    .nav-links a:hover{color:var(--text)}
+    .nav-cta{padding:.45rem 1rem;border-radius:999px;font-size:.82rem;font-weight:600;background:linear-gradient(135deg,var(--accent),#2563eb);color:#fff;text-decoration:none}
+
+    section{padding:5rem 2rem;max-width:1180px;margin:0 auto}
+    .section-label{display:inline-block;font-size:.72rem;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--accent2);margin-bottom:.6rem}
+    h2{font-size:clamp(1.6rem,4vw,2.35rem);font-weight:700;letter-spacing:-.03em;margin-bottom:.85rem}
+    .lead{color:var(--muted);font-size:1.05rem;max-width:700px;margin-bottom:2rem}
+
+    /* Hero */
+    .hero-wrap{position:relative;min-height:92vh;display:flex;align-items:center;overflow:hidden;margin-top:3.5rem}
+    .hero-bg{position:absolute;inset:0;z-index:0}
+    .hero-bg img{width:100%;height:100%;object-fit:cover;opacity:.45}
+    .hero-bg::after{content:'';position:absolute;inset:0;background:linear-gradient(105deg,rgba(5,8,16,.92) 0%,rgba(5,8,16,.75) 45%,rgba(5,8,16,.35) 100%)}
+    .hero-inner{position:relative;z-index:1;max-width:1180px;margin:0 auto;padding:4rem 2rem;width:100%}
+    .hero-badges{display:flex;flex-wrap:wrap;gap:.6rem;margin-bottom:1.25rem}
+    .badge{padding:.35rem .85rem;border-radius:999px;font-size:.75rem;font-weight:600;border:1px solid var(--border);background:rgba(255,255,255,.04)}
+    .badge.live{border-color:rgba(0,212,170,.4);color:var(--accent2);background:rgba(0,212,170,.08)}
+    .badge.legacy{color:var(--muted)}
+    .hero h1{font-size:clamp(2.4rem,6vw,4.2rem);font-weight:700;line-height:1.06;letter-spacing:-.04em;margin-bottom:1rem;max-width:720px}
+    .hero h1 em{font-style:normal;background:linear-gradient(135deg,var(--accent),var(--accent2),var(--atgc));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+    .hero-sub{font-size:1.1rem;color:var(--muted);max-width:580px;margin-bottom:2rem}
+    .hero-actions{display:flex;flex-wrap:wrap;gap:.85rem;margin-bottom:2.5rem}
+    .btn{display:inline-flex;align-items:center;gap:.45rem;padding:.8rem 1.35rem;border-radius:999px;font-weight:600;font-size:.9rem;text-decoration:none;border:none;cursor:pointer;font-family:inherit;transition:transform .2s}
+    .btn-primary{background:linear-gradient(135deg,var(--accent),#2563eb);color:#fff;box-shadow:0 8px 28px rgba(59,158,255,.28)}
+    .btn-primary:hover{transform:translateY(-2px)}
+    .btn-ghost{background:rgba(255,255,255,.04);color:var(--text);border:1px solid var(--border)}
+    .hero-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:.85rem;max-width:680px}
+    .stat{padding:1rem;border-radius:var(--radius);background:rgba(255,255,255,.04);border:1px solid var(--border);backdrop-filter:blur(8px)}
+    .stat-val{font-size:1.5rem;font-weight:700;color:var(--accent2)}
+    .stat-lbl{font-size:.75rem;color:var(--muted);margin-top:.2rem}
+
+    /* Compare cards */
+    .compare-grid{display:grid;grid-template-columns:1fr 1fr;gap:1.25rem}
+    @media(max-width:768px){.compare-grid{grid-template-columns:1fr}.nav-links{display:none}}
+    .compare-card{padding:1.5rem;border-radius:var(--radius);border:1px solid var(--border);background:var(--bg2)}
+    .compare-card h3{font-size:1rem;margin-bottom:.75rem;display:flex;align-items:center;gap:.5rem}
+    .compare-card.old h3{color:var(--muted)}
+    .compare-card.new h3{color:var(--accent2)}
+    .compare-card ul{list-style:none;font-size:.9rem;color:var(--muted)}
+    .compare-card li{padding:.35rem 0;border-bottom:1px solid var(--border)}
+    .compare-card li:last-child{border:none}
+    .compare-card li strong{color:var(--text)}
+
+    /* Policy panel */
+    .policy-panel{display:grid;grid-template-columns:1.1fr .9fr;gap:1.75rem;align-items:start}
+    @media(max-width:860px){.policy-panel{grid-template-columns:1fr}}
+    .toggle-group{display:flex;gap:.4rem;margin-bottom:1.25rem;background:var(--bg3);padding:.3rem;border-radius:999px;width:fit-content;flex-wrap:wrap}
+    .toggle-btn{padding:.55rem 1rem;border-radius:999px;border:none;cursor:pointer;font-family:inherit;font-weight:600;font-size:.82rem;background:transparent;color:var(--muted);transition:all .2s}
+    .toggle-btn.greedy.active{background:var(--greedy);color:#041510}
+    .toggle-btn.cb.active{background:var(--cb);color:#0f0820}
+    .toggle-btn.atgc.active{background:var(--atgc);color:#1a0a00}
+    .policy-visual{aspect-ratio:16/10;border-radius:var(--radius);overflow:hidden;background:var(--bg3);border:1px solid var(--border)}
+    .policy-visual svg{width:100%;height:100%}
+    .policy-detail{padding:1.35rem;border-radius:var(--radius);background:var(--bg2);border:1px solid var(--border)}
+    .policy-detail h3{font-size:1.2rem;margin-bottom:.5rem}
+    .policy-detail p{color:var(--muted);font-size:.92rem}
+    .policy-meta{margin-top:1rem;display:grid;gap:.5rem}
+    .meta-row{display:flex;justify-content:space-between;font-size:.85rem;padding:.45rem 0;border-bottom:1px solid var(--border)}
+    .meta-row span:first-child{color:var(--muted)}
+    code{font-family:'IBM Plex Mono',monospace;font-size:.78rem;background:rgba(255,255,255,.06);padding:.15rem .4rem;border-radius:4px}
+
+    /* Matrix */
+    .matrix-wrap{overflow-x:auto;border-radius:var(--radius);border:1px solid var(--border);background:var(--bg2)}
+    table.matrix{width:100%;border-collapse:collapse;font-size:.88rem}
+    .matrix th,.matrix td{padding:.85rem 1rem;text-align:center;border:1px solid var(--border)}
+    .matrix th{background:var(--bg3);color:var(--muted);font-weight:600;font-size:.78rem;text-transform:uppercase;letter-spacing:.06em}
+    .matrix td{cursor:pointer;transition:background .2s;color:var(--muted)}
+    .matrix td:hover,.matrix td.active{background:rgba(59,158,255,.1);color:var(--text)}
+    .matrix td.done{background:rgba(0,212,170,.08);color:var(--accent2)}
+    .matrix-detail{margin-top:1rem;padding:1.25rem;border-radius:var(--radius);background:var(--bg3);border:1px solid var(--border);font-size:.9rem;color:var(--muted);min-height:80px}
+
+    /* Charts */
+    .chart-row{display:grid;grid-template-columns:1fr 1fr;gap:1.25rem}
+    @media(max-width:860px){.chart-row{grid-template-columns:1fr}}
+    .chart-box{padding:1.25rem;border-radius:var(--radius);background:var(--bg2);border:1px solid var(--border)}
+    .chart-box h4{font-size:.9rem;margin-bottom:.75rem;color:var(--muted)}
+    .chart-note{font-size:.78rem;color:var(--muted);margin-top:.75rem;font-style:italic}
+
+    /* Simulator */
+    .sim-layout{display:grid;grid-template-columns:1fr 300px;gap:1.25rem}
+    @media(max-width:900px){.sim-layout{grid-template-columns:1fr}}
+    .sim-canvas-wrap{border-radius:var(--radius);background:var(--bg2);border:1px solid var(--border);padding:.75rem}
+    #segCanvas{width:100%;display:block;border-radius:8px}
+    .sim-controls{display:flex;flex-direction:column;gap:.85rem}
+    .sim-controls label{font-size:.82rem;color:var(--muted);font-weight:600}
+    .sim-log{font-family:'IBM Plex Mono',monospace;font-size:.72rem;background:#000;border-radius:8px;padding:.85rem;height:180px;overflow-y:auto;color:#4ade80;border:1px solid #1a3a1a}
+
+    /* Tools */
+    .tool-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:1rem}
+    .tool-card{padding:1.25rem;border-radius:var(--radius);background:var(--bg2);border:1px solid var(--border)}
+    .tool-card h4{font-family:'IBM Plex Mono',monospace;font-size:.85rem;color:var(--accent);margin-bottom:.5rem}
+    .tool-card p{font-size:.85rem;color:var(--muted);margin-bottom:.75rem}
+    .tool-cmd{font-family:'IBM Plex Mono',monospace;font-size:.72rem;background:#000;padding:.75rem;border-radius:6px;color:#82aaff;overflow-x:auto;white-space:pre}
+
+    /* Terminal */
+    .terminal{border-radius:var(--radius);overflow:hidden;border:1px solid var(--border)}
+    .term-bar{display:flex;align-items:center;gap:.5rem;padding:.65rem 1rem;background:#1a1f2e}
+    .term-dot{width:11px;height:11px;border-radius:50%}
+    .term-dot.r{background:#ff5f57}.term-dot.y{background:#febc2e}.term-dot.g{background:#28c840}
+    .term-title{flex:1;text-align:center;font-size:.78rem;color:var(--muted);font-family:'IBM Plex Mono',monospace}
+    .term-body{background:#0a0e14;padding:1rem;min-height:280px;font-family:'IBM Plex Mono',monospace;font-size:.76rem;line-height:1.75}
+    .term-line{opacity:0}.term-line.show{animation:fade .2s forwards}
+    @keyframes fade{to{opacity:1}}
+    .term-prompt{color:var(--accent2)}.term-trace{color:#82aaff}.term-sys{color:var(--muted)}
+
+    .reveal{opacity:0;transform:translateY(24px);transition:all .65s ease}
+    .reveal.visible{opacity:1;transform:translateY(0)}
+    footer{text-align:center;padding:2.5rem 2rem;border-top:1px solid var(--border);color:var(--muted);font-size:.82rem}
+    footer a{color:var(--accent);text-decoration:none}
+  </style>
+</head>
+<body>
+  <div class="mesh"></div>
+  <div class="grid-overlay"></div>
+
+  <nav>
+    <div class="logo">Ad-infinitum · 2026</div>
+    <ul class="nav-links">
+      <li><a href="#evolution">2016→2026</a></li>
+      <li><a href="#policies">Policies</a></li>
+      <li><a href="#matrix">Experiments</a></li>
+      <li><a href="#metrics">Metrics</a></li>
+      <li><a href="#tools">Tools</a></li>
+      <li><a href="#simulator">Simulator</a></li>
+    </ul>
+    <a class="nav-cta" href="RESEARCH-2026.md">Research Doc</a>
+  </nav>
+
+  <!-- HERO -->
+  <div class="hero-wrap">
+    <div class="hero-bg">
+      <img src="assets/hero-2026.png" alt="F2FS segment garbage collection visualization" />
+    </div>
+    <div class="hero-inner">
+      <div class="hero-badges">
+        <span class="badge live">● 2026 Edition</span>
+        <span class="badge legacy">2016 IJTRD Paper</span>
+        <span class="badge">Greedy · CB · ATGC</span>
+      </div>
+      <h1>Beyond Throughput:<br/><em>Latency-Aware GC</em></h1>
+      <p class="hero-sub">Ten years after our F2FS cleaning-policy survey, this edition uses mainline sysfs knobs, fio benchmarks, and ftrace — not printk patches — to answer the questions we couldn't in 2015.</p>
+      <div class="hero-actions">
+      <a class="btn btn-primary" href="http://localhost:8765/live.html">▶ Live GC Demo (3 policies)</a>
+      <a class="btn btn-ghost" href="RESEARCH-2026.md">Read RESEARCH-2026.md</a>
+        <a class="btn btn-ghost" href="https://www.ijtrd.com/papers/IJTRD3508.pdf" target="_blank" rel="noopener">2016 Paper</a>
+      </div>
+      <div class="hero-stats">
+        <div class="stat"><div class="stat-val">3</div><div class="stat-lbl">GC policies (Greedy, CB, ATGC)</div></div>
+        <div class="stat"><div class="stat-val">p99</div><div class="stat-lbl">Fsync latency target metric</div></div>
+        <div class="stat"><div class="stat-val">4</div><div class="stat-lbl">Utilization levels (50–95%)</div></div>
+        <div class="stat"><div class="stat-val">0</div><div class="stat-lbl">Kernel forks required</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- EVOLUTION -->
+  <section id="evolution" class="reveal">
+    <span class="section-label">Evolution</span>
+    <h2>2016 → 2026</h2>
+    <p class="lead">Same research question — different infrastructure. We keep the historical kernel module; new work runs on mainline F2FS.</p>
+    <div class="compare-grid">
+      <div class="compare-card old">
+        <h3>📁 2016 (Original)</h3>
+        <ul>
+          <li><strong>Kernel:</strong> Linux 4.1.8 fork in gc.c</li>
+          <li><strong>Policies:</strong> Forced GREEDY in code (buggy trial)</li>
+          <li><strong>Observe:</strong> printk(KERN_ERR) → dmesg</li>
+          <li><strong>Metric:</strong> Compilebench system time only</li>
+          <li><strong>Fix:</strong> policy2 FG_GC early-exit patch</li>
+          <li><strong>Published:</strong> <a href="https://www.ijtrd.com/papers/IJTRD3508.pdf" style="color:var(--accent)">IJTRD survey</a></li>
+        </ul>
+      </div>
+      <div class="compare-card new">
+        <h3>⚡ 2026 (This edition)</h3>
+        <ul>
+          <li><strong>Kernel:</strong> Mainline 5.10+ via sysfs</li>
+          <li><strong>Policies:</strong> Greedy / CB / ATGC toggles</li>
+          <li><strong>Observe:</strong> ftrace + tools/trace-gc.sh</li>
+          <li><strong>Metrics:</strong> p99 latency, IOPS, GC events, WA</li>
+          <li><strong>Fix:</strong> migration_window_granularity + reference patch</li>
+          <li><strong>Repro:</strong> tools/run-experiment.sh + fio jobs</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- POLICIES -->
+  <section id="policies" class="reveal">
+    <span class="section-label">Interactive</span>
+    <h2>Three GC policies</h2>
+    <p class="lead">F2FS now supports Age-Threshold GC (ATGC) in addition to the Greedy and Cost-Benefit policies we studied in 2016.</p>
+    <div class="policy-panel">
+      <div>
+        <div class="toggle-group" id="policyToggles">
+          <button class="toggle-btn greedy active" data-p="greedy">Greedy</button>
+          <button class="toggle-btn cb" data-p="cb">Cost-Benefit</button>
+          <button class="toggle-btn atgc" data-p="atgc">ATGC</button>
+        </div>
+        <div class="policy-visual"><svg viewBox="0 0 480 280" id="policySvg"></svg></div>
+      </div>
+      <div class="policy-detail" id="policyDetail"></div>
+    </div>
+  </section>
+
+  <!-- MATRIX -->
+  <section id="matrix" class="reveal">
+    <span class="section-label">Methodology</span>
+    <h2>Experiment matrix</h2>
+    <p class="lead">One variable at a time. Click a cell to see the exact command. Run with <code>tools/run-experiment.sh</code>.</p>
+    <div class="matrix-wrap">
+      <table class="matrix" id="expMatrix">
+        <thead>
+          <tr><th>Utilization</th><th>Greedy</th><th>Cost-Benefit</th><th>ATGC</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="matrix-detail" id="matrixDetail">Select a cell to view the experiment command and expected metrics.</div>
+  </section>
+
+  <!-- METRICS -->
+  <section id="metrics" class="reveal">
+    <span class="section-label">Results</span>
+    <h2>Metrics that matter</h2>
+    <p class="lead">2016 measured throughput. 2026 adds tail latency — where foreground GC actually hurts applications.</p>
+    <div class="chart-row">
+      <div class="chart-box">
+        <h4>2016 — Compilebench system time (published)</h4>
+        <canvas id="chart2016" height="200"></canvas>
+        <p class="chart-note">Source: IJTRD 2016 paper. F2FS wins compile phase 2.5×.</p>
+      </div>
+      <div class="chart-box">
+        <h4>2026 — Target: p99 fsync latency @ 90% full (µs, lower is better)</h4>
+        <canvas id="chart2026" height="200"></canvas>
+        <p class="chart-note">Hypothesis targets until real runs populate benchmarks/results/. Greedy expected to lead at high utilization.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- TOOLS -->
+  <section id="tools" class="reveal">
+    <span class="section-label">Tooling</span>
+    <h2>Research toolchain</h2>
+    <p class="lead">Replaces the 2016 printk branches with reproducible scripts.</p>
+    <div class="tool-grid">
+      <div class="tool-card">
+        <h4>tools/trace-gc.sh</h4>
+        <p>ftrace capture + sysfs policy snapshot. Replaces printk-1.</p>
+        <div class="tool-cmd">sudo ./tools/trace-gc.sh -d /mnt/f2fs -t 120</div>
+      </div>
+      <div class="tool-card">
+        <h4>tools/run-experiment.sh</h4>
+        <p>Full policy × utilization matrix with fio.</p>
+        <div class="tool-cmd">sudo ./tools/run-experiment.sh -d /mnt/f2fs -p all -u 90 -r 5</div>
+      </div>
+      <div class="tool-card">
+        <h4>tools/summarize-results.py</h4>
+        <p>Parse fio JSON → p50/p95/p99 table.</p>
+        <div class="tool-cmd">python3 tools/summarize-results.py</div>
+      </div>
+      <div class="tool-card">
+        <h4>patches/policy2-*.patch</h4>
+        <p>Reference port of 2016 FG_GC early-exit for A/B testing.</p>
+        <div class="tool-cmd">patch -p1 &lt; patches/policy2-fg-gc-early-exit.reference.patch</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SIMULATOR -->
+  <section id="simulator" class="reveal">
+    <span class="section-label">Interactive</span>
+    <h2>Segment cleaning simulator</h2>
+    <p class="lead">Visualize victim selection across all three policies. Trigger GC at high utilization.</p>
+    <div class="sim-layout">
+      <div class="sim-canvas-wrap"><canvas id="segCanvas" width="700" height="380"></canvas></div>
+      <div class="sim-controls">
+        <label>Disk utilization: <span id="utilVal">75</span>%</label>
+        <input type="range" id="utilSlider" min="40" max="98" value="75" />
+        <div class="toggle-group" style="width:100%" id="simToggles">
+          <button class="toggle-btn greedy active" data-p="greedy" style="flex:1">Greedy</button>
+          <button class="toggle-btn cb" data-p="cb" style="flex:1">CB</button>
+          <button class="toggle-btn atgc" data-p="atgc" style="flex:1">ATGC</button>
+        </div>
+        <button class="btn btn-primary" style="width:100%;justify-content:center" id="triggerGC">⚡ Trigger GC</button>
+        <div class="sim-log" id="simLog"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TERMINAL -->
+  <section id="terminal" class="reveal">
+    <span class="section-label">Live session</span>
+    <h2>ftrace session (2026)</h2>
+    <p class="lead">Structured tracing replaces printk spam. Replay a sample capture.</p>
+    <div class="terminal">
+      <div class="term-bar">
+        <div class="term-dot r"></div><div class="term-dot y"></div><div class="term-dot g"></div>
+        <div class="term-title">trace-gc.sh — f2fs ftrace @ Linux 6.x</div>
+      </div>
+      <div class="term-body" id="termBody">
+        <div><span class="term-prompt">$</span> <span class="term-sys">Click Replay to simulate ftrace output</span></div>
+      </div>
+    </div>
+    <div style="margin-top:1rem;text-align:center">
+      <button class="btn btn-primary" id="replayBtn">▶ Replay ftrace Session</button>
+    </div>
+  </section>
+
+  <footer>
+    <p>Ad-infinitum 2026 · PICT lineage · <a href="https://github.com/amsborse/Ad-infinitum">GitHub</a> · <a href="https://www.ijtrd.com/papers/IJTRD3508.pdf">2016 Paper</a></p>
+    <p style="margin-top:.4rem">Historical module: <code>fs/f2fs/</code> (Linux 4.1.8) · Modern experiments: mainline sysfs</p>
+  </footer>
+
+  <script>
+    /* ── Policies ── */
+    const POLICIES = {
+      greedy: {
+        title: 'Greedy Policy', color: '#00d4aa',
+        desc: 'Selects the section with the fewest valid blocks. Used for foreground GC when free space runs low.',
+        sysfs: 'gc_idle=2, atgc_enabled=0', fg: 'FG_GC', optimizes: 'p99 fsync latency',
+        pick: (s) => s.valid
+      },
+      cb: {
+        title: 'Cost-Benefit Policy', color: '#a78bfa',
+        desc: 'Weighs segment utilization and age (mtime). Default background GC policy since LFS (1988).',
+        sysfs: 'gc_idle=1, atgc_enabled=0', fg: 'BG_GC', optimizes: 'Long-term throughput',
+        pick: (s) => (100 - s.valid * 10) * s.age / (100 + s.valid * 10)
+      },
+      atgc: {
+        title: 'ATGC — Age-Threshold GC', color: '#ff8c42',
+        desc: 'Filters oldest segments by age threshold, migrates to same-age target via SSR. Upstream since ~2020. Reported 65% fewer BG GC calls.',
+        sysfs: 'gc_idle=1, atgc_enabled=1', fg: 'BG_GC', optimizes: 'BG efficiency + hot/cold separation',
+        pick: (s) => s.age > 60 ? s.valid * 0.5 : 999
+      }
+    };
+
+    let curPolicy = 'greedy';
+
+    function renderPolicyDetail(p) {
+      const d = POLICIES[p];
+      document.getElementById('policyDetail').innerHTML = `
+        <h3 style="color:${d.color}">${d.title}</h3>
+        <p>${d.desc}</p>
+        <div class="policy-meta">
+          <div class="meta-row"><span>Sysfs</span><code>${d.sysfs}</code></div>
+          <div class="meta-row"><span>Primary path</span><span>${d.fg}</span></div>
+          <div class="meta-row"><span>Optimizes</span><span>${d.optimizes}</span></div>
+        </div>`;
+    }
+
+    function drawPolicySvg(p) {
+      const d = POLICIES[p];
+      const segs = Array.from({length:10}, (_,i) => ({
+        valid: [2,8,3,9,1,7,4,6,5,3][i],
+        age: [20,80,35,90,15,70,45,60,55,40][i]
+      }));
+      let best = 0, bestScore = Infinity;
+      segs.forEach((s,i) => { const sc = d.pick(s); if (sc < bestScore) { bestScore = sc; best = i; } });
+      document.getElementById('policySvg').innerHTML = segs.map((s,i) => {
+        const x = 24 + i * 44, h = (s.valid / 10) * 160, sel = i === best;
+        return `<rect x="${x}" y="${210-h}" width="36" height="${h}" rx="4" fill="${sel ? d.color : 'rgba(255,255,255,.1)'}" stroke="${sel ? d.color : 'rgba(255,255,255,.15)'}" stroke-width="${sel?2:1}"/>
+          ${sel ? `<text x="${x+18}" y="${195-h}" text-anchor="middle" fill="#fff" font-size="9" font-weight="700">VICTIM</text>` : ''}
+          <text x="${x+18}" y="240" text-anchor="middle" fill="#8ba3c7" font-size="8">S${i}</text>`;
+      }).join('') + `<text x="240" y="24" text-anchor="middle" fill="${d.color}" font-size="13" font-weight="600">${d.title}</text>`;
+    }
+
+    document.getElementById('policyToggles').onclick = e => {
+      const btn = e.target.closest('[data-p]'); if (!btn) return;
+      curPolicy = btn.dataset.p;
+      document.querySelectorAll('#policyToggles .toggle-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      renderPolicyDetail(curPolicy);
+      drawPolicySvg(curPolicy);
+    };
+    renderPolicyDetail('greedy');
+    drawPolicySvg('greedy');
+
+    /* ── Experiment matrix ── */
+    const utils = [50, 75, 90, 95];
+    const pols = ['greedy', 'cost-benefit', 'atgc'];
+    const tbody = document.querySelector('#expMatrix tbody');
+    utils.forEach(u => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<th style="text-align:left">${u}% full</th>` +
+        pols.map(p => `<td data-u="${u}" data-p="${p}">Run ×5</td>`).join('');
+      tbody.appendChild(tr);
+    });
+    document.getElementById('expMatrix').onclick = e => {
+      const td = e.target.closest('td'); if (!td) return;
+      document.querySelectorAll('#expMatrix td').forEach(c => c.classList.remove('active'));
+      td.classList.add('active');
+      const u = td.dataset.u, p = td.dataset.p;
+      document.getElementById('matrixDetail').innerHTML = `
+        <strong>${p} @ ${u}% utilization</strong><br><br>
+        <code>sudo ./tools/run-experiment.sh -d /mnt/f2fs -p ${p} -u ${u} -r 5</code><br><br>
+        Captures: p50/p95/p99 fsync latency · GC trace events · fio JSON → benchmarks/results/<br>
+        Policy sysfs: ${POLICIES[p === 'cost-benefit' ? 'cb' : p]?.sysfs || ''}`;
+    };
+
+    /* ── Charts ── */
+    new Chart(document.getElementById('chart2016'), {
+      type: 'bar',
+      data: {
+        labels: ['Init','Create','Patch','Compile','Clean','Read'],
+        datasets: [
+          { label:'NILFS', data:[1.35,1.02,1.03,1.70,0.09,1.09], backgroundColor:'rgba(255,140,66,.75)', borderRadius:4 },
+          { label:'F2FS', data:[1.16,1.06,0.87,0.69,0.07,0.94], backgroundColor:'rgba(59,158,255,.75)', borderRadius:4 }
+        ]
+      },
+      options: { plugins:{legend:{labels:{color:'#8ba3c7'}}}, scales:{ y:{ticks:{color:'#8ba3c7'},grid:{color:'rgba(255,255,255,.06)'}}, x:{ticks:{color:'#8ba3c7'},grid:{display:false}} } }
+    });
+
+    new Chart(document.getElementById('chart2026'), {
+      type: 'bar',
+      data: {
+        labels: ['Greedy','Cost-Benefit','ATGC'],
+        datasets: [{
+          label:'p99 fsync µs (hypothesis @ 90%)',
+          data: [820, 1240, 980],
+          backgroundColor: ['rgba(0,212,170,.75)','rgba(167,139,250,.75)','rgba(255,140,66,.75)'],
+          borderRadius: 6
+        }]
+      },
+      options: { plugins:{legend:{display:false}}, scales:{ y:{title:{display:true,text:'µs',color:'#8ba3c7'},ticks:{color:'#8ba3c7'},grid:{color:'rgba(255,255,255,.06)'}}, x:{ticks:{color:'#8ba3c7'},grid:{display:false}} } }
+    });
+
+    /* ── Simulator ── */
+    const canvas = document.getElementById('segCanvas');
+    const ctx = canvas.getContext('2d');
+    const COLS = 14, ROWS = 7, N = COLS * ROWS;
+    let blocks = [], simPol = 'greedy', util = 75;
+
+    function initBlocks() {
+      blocks = Array.from({length:N}, () => ({ valid: Math.random() > 0.4, age: Math.random() }));
+    }
+    initBlocks();
+
+    function drawSim() {
+      const W = canvas.width, H = canvas.height, bw = W/COLS-3, bh = H/ROWS-3;
+      ctx.fillStyle = '#0a0e14'; ctx.fillRect(0,0,W,H);
+      blocks.forEach((b,i) => {
+        const c = i%COLS, r = Math.floor(i/COLS), x = c*(bw+3)+2, y = r*(bh+3)+2;
+        if (!b.valid) ctx.fillStyle = 'rgba(255,107,107,.2)';
+        else {
+          const d = POLICIES[simPol];
+          const t = simPol === 'greedy' ? 1-b.valid : b.age;
+          ctx.fillStyle = `hsla(${160+t*80},65%,50%,${.35+t*.45})`;
+        }
+        ctx.fillRect(x,y,bw,bh);
+      });
+      ctx.fillStyle = '#8ba3c7'; ctx.font = '11px IBM Plex Mono';
+      ctx.fillText(`Util: ${util}%  Policy: ${POLICIES[simPol].title}  Valid: ${blocks.filter(b=>b.valid).length}/${N}`, 8, H-6);
+    }
+
+    function log(msg) {
+      const el = document.getElementById('simLog');
+      el.innerHTML += `<div>[${new Date().toLocaleTimeString()}] ${msg}</div>`;
+      el.scrollTop = el.scrollHeight;
+    }
+
+    document.getElementById('simToggles').onclick = e => {
+      const b = e.target.closest('[data-p]'); if (!b) return;
+      simPol = b.dataset.p;
+      document.querySelectorAll('#simToggles .toggle-btn').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      drawSim();
+    };
+    document.getElementById('utilSlider').oninput = e => { util = e.target.value; document.getElementById('utilVal').textContent = util; };
+    document.getElementById('triggerGC').onclick = () => {
+      log(`FG_GC triggered @ ${util}% — policy: ${POLICIES[simPol].title}`);
+      let best = 0, bs = Infinity;
+      blocks.forEach((b,i) => { if (!b.valid) return; const s = POLICIES[simPol].pick(b); if (s < bs) { bs = s; best = i; } });
+      const row = Math.floor(best/COLS)*COLS;
+      for (let i = row; i < row+COLS; i++) if (blocks[i]) blocks[i].valid = false;
+      blocks.forEach(b => { if (Math.random() < util/500) b.valid = false; });
+      log(`Section ${Math.floor(best/COLS)} reclaimed · ${POLICIES[simPol].sysfs}`);
+      drawSim();
+    };
+    drawSim();
+
+    /* ── ftrace replay ── */
+    const traceLines = [
+      ['sys', '--- sysfs policy state ---'],
+      ['sys', '  gc_idle                         1'],
+      ['sys', '  atgc_enabled                    1'],
+      ['sys', '  migration_window_granularity    1'],
+      ['trace', 'f2fs_gc_begin: dev=259,0 type=background'],
+      ['trace', 'f2fs_get_victim: segno=142 policy=ATGC valid_blocks=12'],
+      ['trace', 'f2fs_gc_end: dev=259,0 reclaimed_segs=1 migrated=48'],
+      ['trace', 'f2fs_gc_begin: dev=259,0 type=foreground'],
+      ['trace', 'f2fs_get_victim: segno=87 policy=GREEDY valid_blocks=3'],
+      ['trace', 'f2fs_gc_end: dev=259,0 reclaimed_segs=1 migrated=11 early_exit=1'],
+      ['sys', 'GC-related trace lines: 6'],
+    ];
+    document.getElementById('replayBtn').onclick = async () => {
+      const body = document.getElementById('termBody');
+      body.innerHTML = '<div><span class="term-prompt">root@lab:~#</span> sudo ./tools/trace-gc.sh -d /mnt/f2fs -t 60</div>';
+      for (const [cls, line] of traceLines) {
+        await new Promise(r => setTimeout(r, 280));
+        const d = document.createElement('div');
+        d.className = 'term-line show term-' + cls;
+        d.textContent = line;
+        body.appendChild(d);
+      }
+    };
+
+    /* ── Scroll reveal ── */
+    const revealObs = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) e.target.classList.add('visible'); }), { threshold: 0.1 });
+    document.querySelectorAll('.reveal').forEach(el => revealObs.observe(el));
+  </script>
+</body>
+</html>

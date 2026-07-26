@@ -1,0 +1,42 @@
+# Kernel module build artifacts
+*.o
+*.ko
+*.mod
+*.mod.c
+*.mod.o
+*.cmd
+*.order
+*.symvers
+Module.symvers
+modules.order
+.tmp_versions/
+
+# Out-of-tree build output in fs/f2fs/
+fs/f2fs/*.o
+fs/f2fs/*.ko
+fs/f2fs/.*.cmd
+fs/f2fs/Module.symvers
+fs/f2fs/modules.order
+
+# Editor / OS
+*~
+*.swp
+*.swo
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Debug / core dumps
+*.dSYM/
+vgcore.*
+core
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Benchmark outputs (keep .gitkeep)
+benchmarks/results/*
+!benchmarks/results/.gitkeep

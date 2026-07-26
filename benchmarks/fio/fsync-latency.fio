@@ -1,0 +1,25 @@
+# Fio job: fsync latency under filesystem pressure
+# Measures p50/p95/p99 — the metric the 2016 paper lacked.
+#
+# Usage:
+#   fio benchmarks/fio/fsync-latency.fio --directory=/mnt/f2fs
+#   fio benchmarks/fio/fsync-latency.fio --directory=/mnt/f2fs \
+#       --output=benchmarks/results/fsync-$(date +%Y%m%d-%H%M).json --output-format=json
+
+[global]
+ioengine=sync
+direct=1
+size=64m
+numjobs=4
+time_based=1
+runtime=120
+group_reporting=1
+lat_percentiles=1
+percentile_list=50:95:99:99.9
+
+[fsync-writer]
+rw=randwrite
+bs=4k
+fsync=1
+iodepth=1
+filename=fsync-test.dat

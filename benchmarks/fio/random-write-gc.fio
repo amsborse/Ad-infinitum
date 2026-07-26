@@ -1,0 +1,22 @@
+# Fio job: sustained random write to trigger background GC
+# Run at 50%, 75%, 90%, 95% disk utilization for policy comparison.
+#
+# Usage:
+#   # Fill disk first (see tools/run-experiment.sh fill)
+#   fio benchmarks/fio/random-write-gc.fio --directory=/mnt/f2fs
+
+[global]
+ioengine=libaio
+direct=1
+size=256m
+numjobs=2
+runtime=300
+time_based=1
+group_reporting=1
+lat_percentiles=1
+
+[random-write]
+rw=randwrite
+bs=4k
+iodepth=32
+filename=gc-pressure.dat

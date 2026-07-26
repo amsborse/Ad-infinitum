@@ -1,0 +1,41 @@
+---
+description: Ad-infinitum F2FS GC research repo — read AGENTS.md for knowledge graph and edit boundaries
+alwaysApply: true
+---
+
+# Ad-infinitum agent context
+
+**Read `AGENTS.md` first** — knowledge graph, file map, branch history, live demo architecture.
+
+## What this repo is
+
+F2FS garbage-collection research (Greedy / Cost-Benefit / ATGC). Kernel sources in `fs/f2fs/` (C, GPL-2.0). 2026 tooling in `tools/`, `benchmarks/`, `docs/`.
+
+## Edit boundaries
+
+| Area | Path | Language | Notes |
+|------|------|----------|-------|
+| Kernel GC | `fs/f2fs/gc.c` | C only | No C++; match kernel style |
+| Live demo | `tools/live-gc-server.py`, `docs/live.html` | Python + HTML | Port **8765**; 3 parallel policies |
+| Experiments | `tools/*.sh`, `benchmarks/` | Shell + fio | Linux + F2FS mount to run |
+| Docs | `docs/`, `README.md` | Markdown/HTML | Live link → `localhost:8765` |
+
+## Live demo (simulation, not real kernel)
+
+```bash
+python tools/live-gc-server.py   # → http://localhost:8765/live.html
+```
+
+Do not serve `live.html` via static `:8080` only — SSE requires the Python server.
+
+## Git
+
+- Best 2016 branch: `origin/policy2` (FG_GC early-exit)
+- `master` = stock 4.1.8 `gc.c`
+- Do not commit unless user explicitly asks
+
+## When stuck
+
+1. `AGENTS.md` task routing diagram
+2. `docs/RESEARCH-2026.md` for sysfs / ATGC
+3. `docs/RUNNING-LOCALLY.md` for Windows vs Linux tiers

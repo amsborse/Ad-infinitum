@@ -1,0 +1,36 @@
+# Experiment matrix — 2026 methodology
+#
+# One variable at a time. Run each cell with tools/run-experiment.sh
+#
+# | Utilization | Greedy (gc_idle=2) | Cost-Benefit (gc_idle=1) | ATGC (atgc=1) |
+# |-------------|--------------------|--------------------------|---------------|
+# | 50%         | run                | run                      | run           |
+# | 75%         | run                | run                      | run           |
+# | 90%         | run                | run                      | run           |
+# | 95%         | run                | run                      | run           |
+#
+# Metrics captured per run (via fio + trace-gc.sh):
+#   - p50 / p95 / p99 fsync latency  (benchmarks/fio/fsync-latency.fio)
+#   - write IOPS under pressure      (benchmarks/fio/random-write-gc.fio)
+#   - GC trace event count           (tools/trace-gc.sh)
+#   - compile workload time          (benchmarks/fio/compile-workload.fio)
+#
+# Sysfs knobs (mainline F2FS, Linux 5.10+):
+#   gc_idle                      0=off 1=cost-benefit 2=greedy
+#   atgc_enabled                 0/1 age-threshold GC
+#   migration_window_granularity segments scanned per FG GC turn
+#   gc_valid_thresh_ratio        skip sections above valid % (zoned)
+#   gc_boost_zoned_gc_percent    boost BG GC on zoned devices
+#
+# Compare against 2016 baseline:
+#   - Compilebench system time (paper Table/Figure 7)
+#   - policy2 early-exit ≈ migration_window_granularity=1 on modern kernels
+
+utilization_pct: [50, 75, 90, 95]
+policies: [greedy, cost-benefit, atgc]
+repeats: 5
+metrics:
+  - fsync_p99_latency_us
+  - random_write_iops
+  - gc_trace_events
+  - compile_elapsed_s

@@ -1,0 +1,75 @@
+From 6f3d1a4bd7856b0651341936a2e7cde6b690d5f9 Mon Sep 17 00:00:00 2001
+From: Ad-infinitum Research <adinfinitumpict@gmail.com>
+Date: Sat, 25 Jul 2026 00:00:00 +0000
+Subject: [PATCH] f2fs: reference FG_GC early section exit (policy2, 2016)
+
+Reference port of the 2016 policy2 latency optimization for modern mainline
+F2FS. Upstream may subsume this via migration_window_granularity sysfs;
+use this patch to A/B test the original early-exit logic.
+
+Original author: Abhishek Marathe (Mar 2016, PR #11)
+2016 rationale: stop scanning remaining segments in a section once one
+segment is fully reclaimed during foreground GC.
+
+Apply to mainline fs/f2fs/gc.c (paths may differ by kernel version).
+
+---
+ fs/f2fs/gc.c | 20 +++++++++++++-------
+ 1 file changed, 13 insertions(+), 7 deletions(-)
+
+diff --git a/fs/f2fs/gc.c b/fs/f2fs/gc.c
+--- a/fs/f2fs/gc.c
++++ b/fs/f2fs/gc.c
+@@ -656,12 +656,13 @@ static int __get_victim(struct f2fs_sb_info *sbi, unsigned int *victim,
+ 	return ret;
+ }
+ 
+-static void do_garbage_collect(struct f2fs_sb_info *sbi, unsigned int segno,
++static int do_garbage_collect(struct f2fs_sb_info *sbi, unsigned int segno,
+ 				struct gc_inode_list *gc_list, int gc_type)
+ {
+ 	struct page *sum_page;
+ 	struct f2fs_summary_block *sum;
+ 	struct blk_plug plug;
++	int nfree = 0;
+ 
+ 	/* read segment summary of victim */
+ 	sum_page = get_sum_page(sbi, segno);
+@@ -672,10 +673,10 @@ static void do_garbage_collect(struct f2fs_sb_info *sbi, unsigned int segno,
+ 
+ 	switch (GET_SUM_TYPE((&sum->footer))) {
+ 	case SUM_TYPE_NODE:
+-		gc_node_segment(sbi, sum->entries, segno, gc_type);
++		nfree = gc_node_segment(sbi, sum->entries, segno, gc_type);
+ 		break;
+ 	case SUM_TYPE_DATA:
+-		gc_data_segment(sbi, sum->entries, gc_list, segno, gc_type);
++		nfree = gc_data_segment(sbi, sum->entries, gc_list, segno, gc_type);
+ 		break;
+ 	}
+ 	blk_finish_plug(&plug);
+@@ -684,6 +685,7 @@ static void do_garbage_collect(struct f2fs_sb_info *sbi, unsigned int segno,
+ 	stat_inc_call_count(sbi->stat_info);
+ 
+ 	f2fs_put_page(sum_page, 1);
++	return nfree;
+ }
+ 
+ int f2fs_gc(struct f2fs_sb_info *sbi)
+@@ -719,9 +721,11 @@ gc_more:
+ 		ra_meta_pages(sbi, GET_SUM_BLOCK(sbi, segno), sbi->segs_per_sec,
+ 								META_SSA);
+ 
+-	for (i = 0; i < sbi->segs_per_sec; i++)
+-		do_garbage_collect(sbi, segno + i, &gc_list, gc_type);
+-
++	for (i = 0; i < sbi->segs_per_sec; i++) {
++		/* policy2 (2016): early exit reduces FG_GC latency */
++		if (!do_garbage_collect(sbi, segno + i, &gc_list, gc_type) && gc_type == FG_GC)
++			break;
++	}
+ 	if (gc_type == FG_GC) {
+ 		sbi->cur_victim_sec = NULL_SEGNO;
+ 		nfree++;
+-- 
+2.40.0

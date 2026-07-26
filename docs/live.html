@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Live F2FS GC — 3 Policies Compared</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --greedy: #3fb950;
+      --cb: #58a6ff;
+      --atgc: #d2a8ff;
+      --warn: #f0883e;
+      --danger: #f85149;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.55;
+      min-height: 100vh;
+    }
+    header {
+      padding: 1.25rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    header h1 { font-size: 1.35rem; font-weight: 600; }
+    header p { color: var(--muted); font-size: 0.92rem; margin-top: 0.35rem; max-width: 900px; }
+    .container { max-width: 1400px; margin: 0 auto; padding: 1.25rem 1.5rem 2rem; }
+
+    .explainer {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem 1.25rem;
+      margin-bottom: 1.25rem;
+      font-size: 0.92rem;
+    }
+    .explainer strong { color: var(--text); }
+
+    .controls {
+      display: flex; flex-wrap: wrap; gap: 1rem; align-items: center;
+      margin-bottom: 1.25rem;
+    }
+    .controls label { font-size: 0.88rem; color: var(--muted); }
+    .controls input[type=range] { width: 180px; vertical-align: middle; }
+    button {
+      background: #238636; color: #fff; border: none; border-radius: 6px;
+      padding: 0.45rem 1rem; font-size: 0.88rem; cursor: pointer;
+    }
+    button.stop { background: #da3633; }
+    button:hover { filter: brightness(1.1); }
+    .status-dot {
+      width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+      background: var(--muted); margin-right: 6px;
+    }
+    .status-dot.live { background: var(--greedy); animation: pulse 1.5s infinite; }
+    @keyframes pulse { 50% { opacity: 0.4; } }
+
+    .banner {
+      background: #1c2128;
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--cb);
+      border-radius: 8px;
+      padding: 0.85rem 1rem;
+      margin-bottom: 1.25rem;
+      font-size: 0.95rem;
+      min-height: 3rem;
+      transition: border-color 0.4s;
+    }
+
+    /* Scoreboard */
+    .scoreboard {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    @media (max-width: 900px) { .scoreboard { grid-template-columns: 1fr; } }
+    .score-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem;
+      position: relative;
+      transition: transform 0.3s, box-shadow 0.3s;
+    }
+    .score-card.winner {
+      box-shadow: 0 0 0 2px rgba(63,185,80,0.5);
+      transform: scale(1.02);
+    }
+    .score-card h3 {
+      font-size: 0.95rem;
+      margin-bottom: 0.25rem;
+      display: flex; align-items: center; gap: 0.5rem;
+    }
+    .score-card .tagline { font-size: 0.78rem; color: var(--muted); margin-bottom: 0.75rem; }
+    .score-card.greedy h3 { color: var(--greedy); }
+    .score-card.cost-benefit h3 { color: var(--cb); }
+    .score-card.atgc h3 { color: var(--atgc); }
+    .perf-bar-wrap {
+      height: 10px; background: #21262d; border-radius: 5px; overflow: hidden; margin: 0.5rem 0;
+    }
+    .perf-bar {
+      height: 100%; border-radius: 5px;
+      transition: width 1s ease-out;
+    }
+    .score-card.greedy .perf-bar { background: var(--greedy); }
+    .score-card.cost-benefit .perf-bar { background: var(--cb); }
+    .score-card.atgc .perf-bar { background: var(--atgc); }
+    .stats-row {
+      display: flex; justify-content: space-between; font-size: 0.8rem; color: var(--muted);
+    }
+    .stats-row span val { color: var(--text); font-weight: 600; }
+    .stats-row2 {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 0.35rem 0.75rem;
+      font-size: 0.72rem; color: var(--muted); margin-top: 0.5rem;
+    }
+    .stats-row2 val { color: var(--text); font-weight: 600; }
+    val.flash { animation: metric-flash 0.6s ease; }
+    @keyframes metric-flash { 50% { color: #fff; text-shadow: 0 0 8px rgba(88,166,255,0.8); } }
+
+    /* Global live metrics */
+    .metrics-global {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 0.75rem;
+      margin-bottom: 1.25rem;
+    }
+    @media (max-width: 1000px) { .metrics-global { grid-template-columns: repeat(3, 1fr); } }
+    @media (max-width: 500px) { .metrics-global { grid-template-columns: repeat(2, 1fr); } }
+    .metric-tile {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.65rem 0.75rem;
+    }
+    .metric-tile .label { font-size: 0.68rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+    .metric-tile .value { font-size: 1.25rem; font-weight: 700; margin-top: 0.15rem; font-variant-numeric: tabular-nums; }
+    .metric-tile .unit { font-size: 0.72rem; color: var(--muted); font-weight: 400; }
+
+    /* Clean speed chart */
+    .speed-chart-wrap {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem;
+      margin-bottom: 1.25rem;
+    }
+    .speed-chart-wrap h3 { font-size: 0.85rem; margin-bottom: 0.75rem; color: var(--muted); font-weight: 500; }
+    .speed-bars { display: flex; flex-direction: column; gap: 0.6rem; }
+    .speed-row { display: flex; align-items: center; gap: 0.75rem; font-size: 0.78rem; }
+    .speed-row .name { width: 5.5rem; flex-shrink: 0; }
+    .speed-row.greedy .name { color: var(--greedy); }
+    .speed-row.cost-benefit .name { color: var(--cb); }
+    .speed-row.atgc .name { color: var(--atgc); }
+    .speed-track {
+      flex: 1; height: 14px; background: #21262d; border-radius: 7px; overflow: hidden;
+    }
+    .speed-fill {
+      height: 100%; border-radius: 7px; width: 0%;
+      transition: width 0.5s ease-out;
+    }
+    .speed-row.greedy .speed-fill { background: var(--greedy); }
+    .speed-row.cost-benefit .speed-fill { background: var(--cb); }
+    .speed-row.atgc .speed-fill { background: var(--atgc); }
+    .speed-val { width: 4.5rem; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+
+    .sparkline {
+      display: flex; align-items: flex-end; gap: 2px; height: 28px; margin-top: 0.5rem;
+    }
+    .sparkline span {
+      flex: 1; min-width: 3px; background: #30363d; border-radius: 1px;
+      transition: height 0.3s;
+    }
+    .score-card.greedy .sparkline span.on { background: var(--greedy); }
+    .score-card.cost-benefit .sparkline span.on { background: var(--cb); }
+    .score-card.atgc .sparkline span.on { background: var(--atgc); }
+
+    /* Three lanes */
+    .lanes {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem;
+    }
+    @media (max-width: 1100px) { .lanes { grid-template-columns: 1fr; } }
+
+    .lane {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem;
+      transition: border-color 0.5s;
+    }
+    .lane.greedy { border-top: 3px solid var(--greedy); }
+    .lane.cost-benefit { border-top: 3px solid var(--cb); }
+    .lane.atgc { border-top: 3px solid var(--atgc); }
+    .lane.active {
+      border-color: #484f58;
+      box-shadow: 0 0 0 1px rgba(88,166,255,0.25);
+    }
+    .lane.running .lane-title::after {
+      content: ' ● running';
+      color: var(--greedy);
+      font-size: 0.72rem;
+      animation: pulse 1.5s infinite;
+    }
+
+    .lane-title { font-size: 0.88rem; font-weight: 600; margin-bottom: 0.5rem; }
+    .pipeline {
+      display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 0.75rem;
+    }
+    .step {
+      font-size: 0.65rem; padding: 3px 6px; border-radius: 4px;
+      background: #21262d; color: var(--muted);
+      transition: all 0.4s;
+    }
+    .step.on {
+      background: #388bfd33; color: #58a6ff;
+      box-shadow: 0 0 8px rgba(88,166,255,0.3);
+    }
+    .step.done { background: #23863633; color: var(--greedy); }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 5px;
+      margin-bottom: 0.75rem;
+    }
+    .chunk {
+      aspect-ratio: 1;
+      border-radius: 5px;
+      background: #21262d;
+      border: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.7rem; font-weight: 600;
+      transition: all 0.6s ease-out;
+      position: relative;
+    }
+    .chunk .fill {
+      position: absolute; bottom: 0; left: 0; right: 0;
+      border-radius: 0 0 4px 4px;
+      transition: height 0.6s ease-out;
+    }
+    .lane.greedy .chunk .fill { background: rgba(63,185,80,0.55); }
+    .lane.cost-benefit .chunk .fill { background: rgba(88,166,255,0.55); }
+    .lane.atgc .chunk .fill { background: rgba(210,168,255,0.55); }
+    .chunk.victim {
+      border-color: var(--warn);
+      box-shadow: 0 0 12px rgba(240,136,62,0.5);
+      animation: victim-pulse 1.2s ease-in-out infinite;
+    }
+    .chunk.cleaning {
+      border-color: var(--cb);
+      animation: clean-flash 0.8s ease-in-out infinite;
+    }
+    .chunk.freed {
+      background: #0d1117 !important;
+      border-color: var(--greedy);
+    }
+    .chunk.freed .fill { height: 0 !important; }
+    @keyframes victim-pulse { 50% { transform: scale(1.06); } }
+    @keyframes clean-flash { 50% { opacity: 0.6; } }
+
+    .lane-msg {
+      font-size: 0.78rem; color: var(--muted);
+      min-height: 2.4em;
+      line-height: 1.35;
+      transition: color 0.3s;
+    }
+    .lane-msg.highlight { color: var(--text); }
+
+    .legend {
+      display: flex; flex-wrap: wrap; gap: 1rem;
+      font-size: 0.78rem; color: var(--muted);
+      margin-top: 1.25rem; padding-top: 1rem;
+      border-top: 1px solid var(--border);
+    }
+    .legend i {
+      display: inline-block; width: 12px; height: 12px;
+      border-radius: 3px; margin-right: 4px; vertical-align: middle;
+    }
+
+    .event-log {
+      margin-top: 1.25rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      max-height: 160px;
+      overflow-y: auto;
+      font-family: ui-monospace, monospace;
+      font-size: 0.72rem;
+      padding: 0.5rem 0.75rem;
+    }
+    .event-log div { padding: 2px 0; color: var(--muted); }
+    .event-log .greedy { color: var(--greedy); }
+    .event-log .cost-benefit { color: var(--cb); }
+    .event-log .atgc { color: var(--atgc); }
+    .warn-box {
+      background: #3d1f1f;
+      border: 1px solid var(--danger);
+      border-radius: 8px;
+      padding: 0.85rem 1rem;
+      margin-bottom: 1rem;
+      font-size: 0.88rem;
+      display: none;
+    }
+    .warn-box.show { display: block; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Live F2FS Garbage Collection — 3 Policies Side by Side</h1>
+    <p>Watch Greedy, Cost-Benefit, and ATGC clean the <em>same</em> messy drive each round. Slower animation so you can follow every step. Higher "App speed" = less slowdown for your apps.</p>
+  </header>
+
+  <div class="container">
+    <div class="explainer">
+      <strong>What's happening?</strong> F2FS writes new data to a log. Old copies pile up in "chunks."
+      When the drive fills up, a cleanup worker picks a chunk, copies still-needed blocks elsewhere, and frees the rest.
+      <strong>Three strategies pick different victims</strong> — compare who keeps apps fast when space is tight.
+    </div>
+
+    <div class="controls">
+      <span><span class="status-dot" id="dot"></span><span id="conn">Connecting…</span></span>
+      <label>Drive fullness: <span id="utilLabel">72</span>%
+        <input type="range" id="util" min="55" max="95" value="72">
+      </label>
+      <button id="startBtn">Start comparison</button>
+      <button id="stopBtn" class="stop">Pause</button>
+    </div>
+
+    <div class="warn-box" id="warnBox">
+      ⚠️ Wrong server — open <strong>http://localhost:8765/live.html</strong> after running
+      <code>python tools/live-gc-server.py</code> (not the static docs server on 8080).
+    </div>
+
+    <div class="banner" id="banner">Connecting to parallel simulation…</div>
+
+    <div class="metrics-global" id="metricsGlobal">
+      <div class="metric-tile"><div class="label">Round</div><div class="value" id="g-round">0</div></div>
+      <div class="metric-tile"><div class="label">Drive full</div><div class="value" id="g-util">72<span class="unit">%</span></div></div>
+      <div class="metric-tile"><div class="label">Blocks cleaned</div><div class="value" id="g-freed">0</div></div>
+      <div class="metric-tile"><div class="label">Blocks migrated</div><div class="value" id="g-migrated">0</div></div>
+      <div class="metric-tile"><div class="label">Clean speed</div><div class="value" id="g-speed">0<span class="unit"> blk/s</span></div></div>
+      <div class="metric-tile"><div class="label">Elapsed</div><div class="value" id="g-elapsed">0<span class="unit">s</span></div></div>
+    </div>
+
+    <div class="speed-chart-wrap">
+      <h3>Live clean speed (blocks freed per second — last cycle)</h3>
+      <div class="speed-bars">
+        <div class="speed-row greedy"><span class="name">Greedy</span><div class="speed-track"><div class="speed-fill" id="bar-greedy"></div></div><span class="speed-val" id="speed-greedy">0 blk/s</span></div>
+        <div class="speed-row cost-benefit"><span class="name">Cost-Benefit</span><div class="speed-track"><div class="speed-fill" id="bar-cost-benefit"></div></div><span class="speed-val" id="speed-cost-benefit">0 blk/s</span></div>
+        <div class="speed-row atgc"><span class="name">ATGC</span><div class="speed-track"><div class="speed-fill" id="bar-atgc"></div></div><span class="speed-val" id="speed-atgc">0 blk/s</span></div>
+      </div>
+    </div>
+
+    <div class="scoreboard" id="scoreboard">
+      <div class="score-card greedy" data-policy="greedy">
+        <h3>🟢 Greedy</h3>
+        <div class="tagline">Pick the chunk with fewest good blocks — fast when urgent</div>
+        <div class="perf-bar-wrap"><div class="perf-bar" style="width:100%"></div></div>
+        <div class="stats-row">
+          <span>App speed: <val id="perf-greedy">100</val></span>
+          <span>Freed: <val id="freed-greedy">0</val></span>
+          <span>Rounds: <val id="cycles-greedy">0</val></span>
+        </div>
+        <div class="stats-row2">
+          <span>Clean speed: <val id="cspd-greedy">0</val> blk/s</span>
+          <span>This round: <val id="rndf-greedy">0</val> freed</span>
+          <span>Migrated: <val id="mig-greedy">0</val></span>
+          <span>Cycle: <val id="cms-greedy">—</val></span>
+          <span>FG/BG: <val id="fgbg-greedy">0/0</val></span>
+          <span>W.Amp: <val id="wa-greedy">0</val></span>
+        </div>
+        <div class="sparkline" id="spark-greedy"></div>
+      </div>
+      <div class="score-card cost-benefit" data-policy="cost-benefit">
+        <h3>🔵 Cost-Benefit</h3>
+        <div class="tagline">Balance junk vs age — best throughput over time</div>
+        <div class="perf-bar-wrap"><div class="perf-bar" style="width:100%"></div></div>
+        <div class="stats-row">
+          <span>App speed: <val id="perf-cost-benefit">100</val></span>
+          <span>Freed: <val id="freed-cost-benefit">0</val></span>
+          <span>Rounds: <val id="cycles-cost-benefit">0</val></span>
+        </div>
+        <div class="stats-row2">
+          <span>Clean speed: <val id="cspd-cost-benefit">0</val> blk/s</span>
+          <span>This round: <val id="rndf-cost-benefit">0</val> freed</span>
+          <span>Migrated: <val id="mig-cost-benefit">0</val></span>
+          <span>Cycle: <val id="cms-cost-benefit">—</val></span>
+          <span>FG/BG: <val id="fgbg-cost-benefit">0/0</val></span>
+          <span>W.Amp: <val id="wa-cost-benefit">0</val></span>
+        </div>
+        <div class="sparkline" id="spark-cost-benefit"></div>
+      </div>
+      <div class="score-card atgc" data-policy="atgc">
+        <h3>🟣 ATGC</h3>
+        <div class="tagline">Age-threshold — efficient background cleanup</div>
+        <div class="perf-bar-wrap"><div class="perf-bar" style="width:100%"></div></div>
+        <div class="stats-row">
+          <span>App speed: <val id="perf-atgc">100</val></span>
+          <span>Freed: <val id="freed-atgc">0</val></span>
+          <span>Rounds: <val id="cycles-atgc">0</val></span>
+        </div>
+        <div class="stats-row2">
+          <span>Clean speed: <val id="cspd-atgc">0</val> blk/s</span>
+          <span>This round: <val id="rndf-atgc">0</val> freed</span>
+          <span>Migrated: <val id="mig-atgc">0</val></span>
+          <span>Cycle: <val id="cms-atgc">—</val></span>
+          <span>FG/BG: <val id="fgbg-atgc">0/0</val></span>
+          <span>W.Amp: <val id="wa-atgc">0</val></span>
+        </div>
+        <div class="sparkline" id="spark-atgc"></div>
+      </div>
+    </div>
+
+    <div class="lanes" id="lanes"></div>
+
+    <div class="legend">
+      <span><i style="background:rgba(63,185,80,0.6)"></i> Chunk fill = good blocks left</span>
+      <span><i style="background:var(--warn);border:1px solid var(--warn)"></i> Orange glow = victim picked</span>
+      <span><i style="background:#388bfd33;border:1px solid var(--cb)"></i> Blue flash = copying data</span>
+      <span><i style="background:#0d1117;border:1px solid var(--greedy)"></i> Empty = freed space</span>
+    </div>
+
+    <div class="event-log" id="log"></div>
+  </div>
+
+  <script>
+    const POLICIES = ['greedy', 'cost-benefit', 'atgc'];
+    const STEPS = ['wake', 'victim', 'scan', 'migrate', 'checkpoint', 'free'];
+    const STEP_MAP = {
+      gc_thread_wake: 'wake',
+      victim_select: 'victim',
+      scan_sit: 'scan',
+      migrate_valid: 'migrate',
+      checkpoint: 'checkpoint',
+      section_free: 'free',
+      gc_complete: 'free'
+    };
+
+    const lanes = {};
+    const metrics = {};
+    POLICIES.forEach(p => {
+      lanes[p] = { segments: Array(16).fill(5), step: -1, victim: -1, msg: '' };
+      metrics[p] = { clean_speed: 0, speed_history: [] };
+    });
+
+    function setVal(id, text) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const plain = String(text);
+      let next = plain;
+      if (id === 'g-util') next = plain + '%';
+      else if (id === 'g-speed') next = plain + ' blk/s';
+      else if (id === 'g-elapsed') next = plain + 's';
+      if (el.textContent === next) return;
+      if (id === 'g-util') el.innerHTML = plain + '<span class="unit">%</span>';
+      else if (id === 'g-speed') el.innerHTML = plain + '<span class="unit"> blk/s</span>';
+      else if (id === 'g-elapsed') el.innerHTML = plain + '<span class="unit">s</span>';
+      else el.textContent = plain;
+      el.classList.add('flash');
+      setTimeout(() => el.classList.remove('flash'), 600);
+    }
+
+    function updateSpeedBar(p, speed) {
+      const max = Math.max(0.5, ...POLICIES.map(x => metrics[x].clean_speed || 0));
+      const pct = Math.min(100, (speed / max) * 100);
+      document.getElementById('bar-' + p).style.width = pct + '%';
+      document.getElementById('speed-' + p).textContent = speed.toFixed(2) + ' blk/s';
+    }
+
+    function renderSparkline(p, history) {
+      const root = document.getElementById('spark-' + p);
+      if (!root) return;
+      const slots = 12;
+      const data = (history || []).slice(-slots);
+      while (data.length < slots) data.unshift(0);
+      const max = Math.max(0.1, ...data);
+      root.innerHTML = data.map(v =>
+        `<span class="${v > 0 ? 'on' : ''}" style="height:${Math.max(4, (v / max) * 100)}%"></span>`
+      ).join('');
+    }
+
+    function applyLaneMetrics(p, m) {
+      if (!m) return;
+      metrics[p].clean_speed = m.clean_speed || 0;
+      metrics[p].speed_history = m.speed_history || metrics[p].speed_history;
+
+      setVal('perf-' + p, m.performance);
+      setVal('freed-' + p, m.blocks_freed_total);
+      setVal('cycles-' + p, m.cycles);
+      setVal('cspd-' + p, (m.clean_speed || 0).toFixed(2));
+      setVal('rndf-' + p, m.blocks_freed_round);
+      setVal('mig-' + p, m.blocks_migrated_total);
+      setVal('cms-' + p, m.cycle_ms ? m.cycle_ms + 'ms' : '—');
+      setVal('fgbg-' + p, `${m.fg_cycles || 0}/${m.bg_cycles || 0}`);
+      setVal('wa-' + p, m.write_amplification ?? '0');
+
+      document.querySelector(`.score-card.${p} .perf-bar`).style.width = (m.performance || 0) + '%';
+      updateSpeedBar(p, m.clean_speed || 0);
+      renderSparkline(p, m.speed_history);
+    }
+
+    function applyGlobalMetrics(g) {
+      if (!g) return;
+      setVal('g-round', g.round ?? 0);
+      setVal('g-util', g.utilization ?? '—');
+      setVal('g-freed', g.total_blocks_freed ?? 0);
+      setVal('g-migrated', g.total_blocks_migrated ?? 0);
+      setVal('g-speed', (g.aggregate_clean_speed ?? 0).toFixed(2));
+      setVal('g-elapsed', g.session_elapsed_s ?? 0);
+    }
+
+    function buildLanes() {
+      const root = document.getElementById('lanes');
+      root.innerHTML = POLICIES.map(p => `
+        <div class="lane ${p}" id="lane-${p}">
+          <div class="lane-title">${p === 'greedy' ? 'Greedy' : p === 'cost-benefit' ? 'Cost-Benefit' : 'ATGC'}</div>
+          <div class="pipeline">${STEPS.map(s =>
+            `<span class="step" data-step="${s}">${s}</span>`
+          ).join('')}</div>
+          <div class="grid" id="grid-${p}"></div>
+          <div class="lane-msg" id="msg-${p}">Ready…</div>
+        </div>
+      `).join('');
+      POLICIES.forEach(renderGrid);
+    }
+
+    function renderGrid(p) {
+      const grid = document.getElementById('grid-' + p);
+      const segs = lanes[p].segments;
+      grid.innerHTML = segs.map((v, i) => {
+        const pct = Math.min(100, v * 11);
+        const cls = i === lanes[p].victim ? ' victim' : '';
+        return `<div class="chunk${cls}" data-i="${i}"><span>${v}</span><div class="fill" style="height:${pct}%"></div></div>`;
+      }).join('');
+    }
+
+    function setStep(p, stepName) {
+      const idx = STEPS.indexOf(stepName);
+      const lane = document.getElementById('lane-' + p);
+      lane.querySelectorAll('.step').forEach((el, i) => {
+        el.classList.remove('on', 'done');
+        if (i < idx) el.classList.add('done');
+        else if (i === idx) el.classList.add('on');
+      });
+      lane.classList.add('active');
+    }
+
+    function updateScore(p, perf, freed, cycles) {
+      setVal('perf-' + p, perf);
+      setVal('freed-' + p, freed);
+      setVal('cycles-' + p, cycles);
+      document.querySelector(`.score-card.${p} .perf-bar`).style.width = perf + '%';
+    }
+
+    function highlightWinner(ranking) {
+      document.querySelectorAll('.score-card').forEach(c => c.classList.remove('winner'));
+      if (ranking && ranking[0]) {
+        document.querySelector(`.score-card.${ranking[0]}`).classList.add('winner');
+      }
+    }
+
+    function logEvent(ev) {
+      const el = document.getElementById('log');
+      const div = document.createElement('div');
+      const cls = ev.policy || '';
+      div.className = cls;
+      div.textContent = `[${ev.type}] ${ev.message || ''}`;
+      el.prepend(div);
+      while (el.children.length > 40) el.lastChild.remove();
+    }
+
+    function handleEvent(ev) {
+      if (ev.type !== 'metrics') logEvent(ev);
+
+      if (ev.type === 'metrics') {
+        applyLaneMetrics(ev.policy, ev);
+        return;
+      }
+
+      if (ev.type === 'metrics_global') {
+        applyGlobalMetrics(ev);
+        return;
+      }
+
+      if (ev.type === 'round_start') {
+        document.getElementById('banner').textContent = ev.message;
+        document.getElementById('utilLabel').textContent = ev.utilization;
+        setVal('g-round', ev.round);
+        setVal('g-util', ev.utilization);
+        POLICIES.forEach(p => {
+          if (ev.segments) lanes[p].segments = ev.segments.slice();
+          lanes[p].victim = -1;
+          lanes[p].step = -1;
+          const laneEl = document.getElementById('lane-' + p);
+          laneEl.classList.remove('running');
+          laneEl.querySelectorAll('.step').forEach(s => s.classList.remove('on','done'));
+          document.getElementById('msg-' + p).textContent = 'Same starting drive — all 3 running in parallel…';
+          setVal('rndf-' + p, 0);
+          renderGrid(p);
+        });
+        return;
+      }
+
+      if (ev.type === 'comparison') {
+        const spd = ev.clean_speed || {};
+        document.getElementById('banner').textContent =
+          `🏆 Round ${ev.round}: ${ev.ranking[0]} fastest clean (${(spd[ev.ranking[0]] || 0).toFixed(2)} blk/s) — ` +
+          `freed: Greedy ${ev.freed.greedy}, CB ${ev.freed['cost-benefit']}, ATGC ${ev.freed.atgc}`;
+        highlightWinner(ev.ranking);
+        POLICIES.forEach(p => { if (spd[p] != null) updateSpeedBar(p, spd[p]); });
+        return;
+      }
+
+      const p = ev.policy;
+      if (!p || !lanes[p]) return;
+
+      document.getElementById('lane-' + p).classList.add('running', 'active');
+
+      const msgEl = document.getElementById('msg-' + p);
+      msgEl.textContent = ev.message || '';
+      msgEl.classList.add('highlight');
+      setTimeout(() => msgEl.classList.remove('highlight'), 800);
+
+      const step = STEP_MAP[ev.type];
+      if (step) setStep(p, step);
+
+      if (ev.type === 'victim_select') {
+        lanes[p].victim = ev.segment;
+        renderGrid(p);
+      }
+
+      if (ev.type === 'migrate_valid') {
+        const chunk = document.querySelector(`#grid-${p} .chunk[data-i="${ev.segment}"]`);
+        if (chunk) chunk.classList.add('cleaning');
+      }
+
+      if (ev.type === 'section_free') {
+        const chunk = document.querySelector(`#grid-${p} .chunk[data-i="${ev.segment ?? lanes[p].victim}"]`);
+        if (chunk) { chunk.classList.remove('cleaning','victim'); chunk.classList.add('freed'); }
+      }
+
+      if (ev.type === 'gc_complete') {
+        lanes[p].segments = ev.segments;
+        lanes[p].victim = -1;
+        renderGrid(p);
+        updateScore(p, ev.performance, ev.blocks_freed, ev.cycles);
+        if (ev.clean_speed != null) updateSpeedBar(p, ev.clean_speed);
+        document.querySelectorAll(`#grid-${p} .chunk`).forEach(c => c.classList.remove('victim','cleaning'));
+        document.getElementById('lane-' + p).classList.remove('running');
+      }
+    }
+
+    async function checkServer() {
+      try {
+        const r = await fetch('/status');
+        const s = await r.json();
+        if (s.mode !== 'simulation-parallel') {
+          document.getElementById('warnBox').classList.add('show');
+          document.getElementById('banner').textContent =
+            'Old single-policy server detected — restart with: python tools/live-gc-server.py';
+        } else if (s.lanes) {
+          applyGlobalMetrics({
+            round: s.round,
+            utilization: s.utilization,
+            total_blocks_freed: s.total_blocks_freed,
+            total_blocks_migrated: POLICIES.reduce((n, p) => n + (s.lanes[p].blocks_migrated_total || 0), 0),
+            aggregate_clean_speed: s.aggregate_clean_speed,
+            session_elapsed_s: s.session_elapsed_s,
+          });
+          POLICIES.forEach(p => {
+            if (s.lanes[p]) {
+              lanes[p].segments = s.lanes[p].segments;
+              applyLaneMetrics(p, s.lanes[p]);
+              renderGrid(p);
+            }
+          });
+        }
+      } catch (_) {
+        document.getElementById('warnBox').classList.add('show');
+      }
+    }
+
+    buildLanes();
+    POLICIES.forEach(p => renderSparkline(p, []));
+    checkServer();
+
+    const dot = document.getElementById('dot');
+    const conn = document.getElementById('conn');
+    let es;
+
+    function connect() {
+      es = new EventSource('/events');
+      es.onopen = () => { dot.classList.add('live'); conn.textContent = 'Live — 3 policies running'; };
+      es.onerror = () => { dot.classList.remove('live'); conn.textContent = 'Disconnected — is the server running?'; };
+      es.onmessage = e => { try { handleEvent(JSON.parse(e.data)); } catch (_) {} };
+    }
+
+    document.getElementById('startBtn').onclick = () => {
+      fetch('/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ utilization: +document.getElementById('util').value })
+      });
+    };
+    document.getElementById('stopBtn').onclick = () => fetch('/stop', { method: 'POST' });
+    document.getElementById('util').onchange = e => {
+      fetch('/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ utilization: +e.target.value })
+      });
+      document.getElementById('utilLabel').textContent = e.target.value;
+    };
+
+    connect();
+    fetch('/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ utilization: 72 })
+    });
+  </script>
+</body>
+</html>
